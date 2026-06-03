@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>mom_agent · 知识库助手</title>
+  <style>
+    /* ============== 基础布局 ============== */
+    :root {
+      --bg: #f7f7f8;
+      --panel: #ffffff;
+      --border: #e5e7eb;
+      --text: #111827;
+      --muted: #6b7280;
+      --user: #dbeafe;
+      --assistant: #ffffff;
+      --think: #fef3c7;
+      --accent: #2563eb;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      padding: 12px 16px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    header h1 { font-size: 16px; margin: 0; }
+    header .meta { font-size: 12px; color: var(--muted); }
+    header .controls { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+    header .controls label { font-size: 13px; display: flex; align-items: center; gap: 6px; }
+    header button {
+      padding: 6px 12px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    header button:hover { background: #f3f4f6; }
+
+    /* ============== 消息流 ============== */
+    #messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .msg { max-width: 78%; padding: 10px 14px; border-radius: 10px; line-height: 1.6; white-space: pre-wrap; word-wrap: break-word; }
+    .msg.user { background: var(--user); align-self: flex-end; }
+    .msg.assistant { background: var(--assistant); align-self: flex-start; border: 1px solid var(--border); }
+    .msg .role { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+    .think {
+      background: var(--think);
+      border-left: 3px solid #f59e0b;
+      padding: 8px 10px;
+      margin: 6px 0;
+      border-radius: 6px;
+      font-size: 13px;
+      color: #6b4f00;
+      white-space: pre-wrap;
+    }
+    .think summary { cursor: pointer; font-weight: 600; }
+    .sources { font-size: 12px; color: var(--muted); margin-top: 6px; }
+    .sources span { display: inline-block; background: #eef2ff; color: #3730a3; border-radius: 999px; padding: 1px 8px; margin-right: 4px; }
+    .meta-line { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+    /* ============== 输入区 ============== */
+    #composer {
+      border-top: 1px solid var(--border);
+      background: var(--panel);
+      padding: 10px 16px;
+      position: relative;
+    }
+    #skill-badge {
+      display: none;
+      background: #ecfdf5;
+      color: #047857;
+      border: 1px solid #a7f3d0;
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-size: 12px;
+      margin-bottom: 6px;
+      align-self: flex-start;
+    }
+    #skill-badge button { background: none; border: 0; cursor: pointer; color: #047857; margin-left: 6px; }
+    #input-row { display: flex; gap: 8px; align-items: flex-end; }
+    #input {
+      flex: 1;
+      min-height: 44px;
+      max-height: 200px;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font: inherit;
+      resize: none;
+      outline: none;
+    }
+    #input:focus { border-color: var(--accent); }
+    #send {
+      padding: 10px 18px;
+      background: var(--accent);
+      color: white;
+      border: 0;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    #send:disabled { opacity: 0.6; cursor: not-allowed; }
+
+    /* ============== Skill 下拉 ============== */
+    #skill-pop {
+      position: absolute;
+      bottom: 64px;
+      left: 16px;
+      right: 16px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      max-height: 240px;
+      overflow-y: auto;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.06);
+      display: none;
+    }
+    .skill-item { padding: 8px 12px; cursor: pointer; }
+    .skill-item:hover, .skill-item.active { background: #eef2ff; }
+    .skill-item .name { font-weight: 600; font-size: 13px; }
+    .skill-item .desc { font-size: 12px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>mom_agent · 知识库助手</h1>
+    <div class="meta">session: <span id="sid"></span></div>
+    <div class="controls">
+      <label><input type="checkbox" id="thinking-toggle" /> 深度思考</label>
+      <button id="upload-skill-btn">上传 Skill</button>
+      <input type="file" id="skill-file" accept=".md" style="display:none" />
+    </div>
+  </header>
+
+  <div id="messages"></div>
+
+  <div id="skill-pop"></div>
+
+  <div id="composer">
+    <div id="skill-badge"><span id="skill-badge-name"></span><button id="skill-badge-clear">×</button></div>
+    <div id="input-row">
+      <textarea id="input" placeholder="输入消息;输入 / 选择 skill。Enter 发送,Shift+Enter 换行"></textarea>
+      <button id="send">发送</button>
+    </div>
+  </div>
+
+<script>
+/* =========================================================
+ * 工具与状态
+ * ========================================================= */
+const $ = (sel) => document.querySelector(sel);
+const messagesEl = $("#messages");
+const inputEl    = $("#input");
+const sendBtn    = $("#send");
+const thinkingCb = $("#thinking-toggle");
+const popEl      = $("#skill-pop");
+const badgeEl    = $("#skill-badge");
+const badgeName  = $("#skill-badge-name");
+const badgeClear = $("#skill-badge-clear");
+const fileInput  = $("#skill-file");
+
+// session_id 持久化(刷新页面保留对话)
+let sessionId = localStorage.getItem("mom_session_id");
+if (!sessionId) {
+  sessionId = crypto.randomUUID();
+  localStorage.setItem("mom_session_id", sessionId);
+}
+$("#sid").textContent = sessionId.slice(0, 8);
+
+// 当前已选中 skill
+let currentSkill = null;
+function setSkill(name) {
+  currentSkill = name;
+  if (name) {
+    badgeEl.style.display = "inline-block";
+    badgeName.textContent = "/" + name;
+  } else {
+    badgeEl.style.display = "none";
+  }
+}
+badgeClear.onclick = () => setSkill(null);
+
+/* =========================================================
+ * 消息渲染
+ * ========================================================= */
+function scrollBottom() { messagesEl.scrollTop = messagesEl.scrollHeight; }
+
+function addUserMessage(text) {
+  const div = document.createElement("div");
+  div.className = "msg user";
+  div.innerHTML = `<div class="role">你</div>`;
+  const body = document.createElement("div");
+  body.textContent = text;
+  div.appendChild(body);
+  messagesEl.appendChild(div);
+  scrollBottom();
+}
+
+function addAssistantBubble() {
+  const div = document.createElement("div");
+  div.className = "msg assistant";
+  div.innerHTML = `<div class="role">助手</div>`;
+
+  const think = document.createElement("details");
+  think.className = "think";
+  think.style.display = "none";
+  think.innerHTML = `<summary>思考过程</summary><div class="think-body"></div>`;
+
+  const ans = document.createElement("div");
+  ans.className = "ans-body";
+
+  const sources = document.createElement("div");
+  sources.className = "sources";
+  sources.style.display = "none";
+
+  const meta = document.createElement("div");
+  meta.className = "meta-line";
+
+  div.appendChild(think);
+  div.appendChild(ans);
+  div.appendChild(sources);
+  div.appendChild(meta);
+  messagesEl.appendChild(div);
+  scrollBottom();
+
+  return {
+    appendThought: (s) => {
+      think.style.display = "block";
+      think.querySelector(".think-body").textContent += s;
+      scrollBottom();
+    },
+    appendAnswer: (s) => { ans.textContent += s; scrollBottom(); },
+    setMeta: (info) => {
+      if (info.sources && info.sources.length) {
+        sources.style.display = "block";
+        sources.innerHTML = "来源:" + info.sources
+          .map((s) => `<span>[${s.idx}] ${s.doc_name} (${s.similarity.toFixed(2)})</span>`)
+          .join("");
+      }
+      const bits = [];
+      if (info.compression_triggered) bits.push("已触发上下文压缩");
+      bits.push(`窗口 ${info.tokens_before}→${info.tokens_after} tokens`);
+      if (info.thinking) bits.push("深度思考");
+      if (info.skill) bits.push(`skill=${info.skill}`);
+      meta.textContent = bits.join(" · ");
+    },
+  };
+}
+
+/* =========================================================
+ * SSE:用 fetch 读取流式响应(EventSource 不支持 POST body)
+ * ========================================================= */
+async function streamChat(text) {
+  const body = {
+    session_id: sessionId,
+    message: text,
+    skill: currentSkill || null,
+    thinking: thinkingCb.checked,
+  };
+
+  const resp = await fetch("/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok || !resp.body) {
+    addAssistantBubble().appendAnswer(`[错误] HTTP ${resp.status}`);
+    return;
+  }
+
+  const bubble = addAssistantBubble();
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+
+  // SSE 帧由空行分隔;每帧含若干 "event:" 与 "data:" 行
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf("\n\n")) !== -1) {
+      const frame = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      handleFrame(frame, bubble);
+    }
+  }
+}
+
+function handleFrame(frame, bubble) {
+  let event = "message";
+  const dataLines = [];
+  for (const line of frame.split("\n")) {
+    if (line.startsWith("event:")) event = line.slice(6).trim();
+    else if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+  }
+  const data = dataLines.join("\n");
+  if (!data) return;
+
+  switch (event) {
+    case "meta":     try { bubble.setMeta(JSON.parse(data)); } catch (_) {} break;
+    case "thought":  bubble.appendThought(data); break;
+    case "answer":   bubble.appendAnswer(data); break;
+    case "done":     break;
+    case "error":    bubble.appendAnswer(`\n[错误] ${data}`); break;
+  }
+}
+
+/* =========================================================
+ * Skill `/` 自动补全
+ * ========================================================= */
+let cachedSkills = [];
+async function fetchSkills() {
+  try {
+    const r = await fetch("/skills");
+    cachedSkills = await r.json();
+  } catch (_) { cachedSkills = []; }
+}
+
+function renderPop(items, query) {
+  if (!items.length) { popEl.style.display = "none"; return; }
+  popEl.innerHTML = items.map((s, i) =>
+    `<div class="skill-item ${i===0?"active":""}" data-name="${s.name}">
+      <div class="name">/${s.name}</div>
+      <div class="desc">${s.description||""}</div>
+    </div>`
+  ).join("");
+  popEl.style.display = "block";
+  popEl.querySelectorAll(".skill-item").forEach(el => {
+    el.onclick = () => pickSkill(el.dataset.name);
+  });
+}
+
+function pickSkill(name) {
+  setSkill(name);
+  // 从输入框中删掉触发的 "/xxx" 串
+  const v = inputEl.value;
+  const lastSlash = v.lastIndexOf("/");
+  if (lastSlash !== -1) {
+    inputEl.value = v.slice(0, lastSlash);
+  }
+  popEl.style.display = "none";
+  inputEl.focus();
+}
+
+function updateSkillPop() {
+  const v = inputEl.value;
+  const m = v.match(/(?:^|\s)\/([^\s/]*)$/);  // 行首或空格后的 / + 后续非空
+  if (!m) { popEl.style.display = "none"; return; }
+  const q = m[1].toLowerCase();
+  const items = (cachedSkills || []).filter(s =>
+    s.name.toLowerCase().includes(q) || (s.description||"").toLowerCase().includes(q)
+  ).slice(0, 8);
+  renderPop(items, q);
+}
+
+inputEl.addEventListener("input", updateSkillPop);
+inputEl.addEventListener("keydown", (e) => {
+  // 弹层打开 + Enter:选中第一个
+  if (popEl.style.display === "block" && e.key === "Enter" && !e.shiftKey) {
+    const first = popEl.querySelector(".skill-item.active");
+    if (first) { e.preventDefault(); pickSkill(first.dataset.name); return; }
+  }
+  if (e.key === "Escape") { popEl.style.display = "none"; }
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    submit();
+  }
+});
+
+/* =========================================================
+ * 上传 Skill
+ * ========================================================= */
+$("#upload-skill-btn").onclick = () => fileInput.click();
+fileInput.onchange = async () => {
+  const f = fileInput.files[0];
+  if (!f) return;
+  const fd = new FormData();
+  fd.append("file", f);
+  const r = await fetch("/skills/upload", { method: "POST", body: fd });
+  if (r.ok) {
+    const s = await r.json();
+    alert(`已上传 skill:${s.name}`);
+    await fetchSkills();
+  } else {
+    const txt = await r.text();
+    alert(`上传失败:${txt}`);
+  }
+  fileInput.value = "";
+};
+
+/* =========================================================
+ * 提交
+ * ========================================================= */
+async function submit() {
+  const text = inputEl.value.trim();
+  if (!text) return;
+  sendBtn.disabled = true;
+  inputEl.value = "";
+  addUserMessage(text);
+  try {
+    await streamChat(text);
+  } finally {
+    sendBtn.disabled = false;
+    inputEl.focus();
+  }
+}
+sendBtn.onclick = submit;
+
+/* 初始 */
+fetchSkills();
+</script>
+</body>
+</html>

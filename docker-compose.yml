@@ -1,0 +1,39 @@
+# docker-compose:仅启动本地依赖(Postgres、Redis)
+# vLLM 与 RAGFlow 视为外部已部署服务,不在此处启动
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mom_agent_postgres
+    environment:
+      POSTGRES_USER: mom
+      POSTGRES_PASSWORD: mom
+      POSTGRES_DB: mom_agent
+    ports:
+      # 宿主机 5433 -> 容器 5432(避开本机已被占用的 5432)
+      - "5433:5432"
+    volumes:
+      - mom_pg_data:/var/lib/postgresql/data
+      # 容器首次启动时自动执行,完成建表
+      - ./migrations/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mom -d mom_agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: mom_agent_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - mom_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  mom_pg_data:
+  mom_redis_data:
