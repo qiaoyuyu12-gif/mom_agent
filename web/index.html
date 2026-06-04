@@ -180,7 +180,14 @@ const fileInput  = $("#skill-file");
 // session_id 持久化(刷新页面保留对话)
 let sessionId = localStorage.getItem("mom_session_id");
 if (!sessionId) {
-  sessionId = crypto.randomUUID();
+  // crypto.randomUUID 仅在安全上下文(HTTPS / localhost)可用;
+  // 走 0.0.0.0 或局域网 IP 访问时降级为 RFC4122 v4 手工生成,避免脚本初始化整体崩掉。
+  sessionId = (window.crypto && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+      });
   localStorage.setItem("mom_session_id", sessionId);
 }
 $("#sid").textContent = sessionId.slice(0, 8);
@@ -295,7 +302,8 @@ async function streamChat(text) {
   while (true) {
     const { value, done } = await reader.read();
     if (done) break;
-    buf += decoder.decode(value, { stream: true });
+    // sse-starlette 用 CRLF;把 \r\n 归一为 \n,后面才能按 \n\n 切帧
+    buf += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
     let idx;
     while ((idx = buf.indexOf("\n\n")) !== -1) {
       const frame = buf.slice(0, idx);

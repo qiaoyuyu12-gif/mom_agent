@@ -12,15 +12,15 @@ python-dotenv==1.0.1
 # HTTP 客户端(调 RAGFlow / vLLM)
 httpx==0.27.2
 
-# LangChain 生态(1.x:含 create_agent + middleware 框架)
-# 注:钉为已验证组合;langgraph-prebuilt 1.0.11+ 已要求 langchain-core>=1.3,
-# 留宽松上界会触发 pip 回溯甚至未来解析失败。
-langchain==1.0.8
-langchain-core==1.0.7
-langchain-openai==1.0.3
-langchain-community==0.3.31
-langgraph==1.0.10
-langgraph-prebuilt==1.0.10
+# LangChain 生态(1.3 / 1.4:含 create_agent + middleware 框架)
+# 注:此前钉的 1.0.x 与 langgraph-checkpoint 4.1.x 不兼容
+# (jsonplus.py 调用 Reviver(allowed_objects=...) 需 langchain-core>=1.3),
+# 故整套升到 1.3/1.4 已验证组合。
+langchain==1.3.4
+langchain-core==1.4.0
+langchain-openai==1.2.2
+langgraph==1.2.4
+langgraph-prebuilt==1.1.0
 
 # 存储
 redis==5.2.0

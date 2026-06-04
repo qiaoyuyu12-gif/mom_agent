@@ -25,12 +25,16 @@ from time import perf_counter
 from typing import Any, AsyncIterator, Tuple
 
 from langchain.agents import create_agent
+from langchain.agents.middleware import (
+    ModelCallLimitMiddleware,
+    SummarizationMiddleware,
+)
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from sqlalchemy.orm import Session as OrmSession
 
 from app.config import get_settings
 from app.core.guards import audit_source_citations
-from app.core.llm import StreamThinkSplitter, _make_llm
+from app.core.llm import StreamThinkSplitter, _make_llm, get_summarizer_llm
 from app.core.middleware import build_harness_middleware
 from app.core.prompts import SYSTEM_PROMPT
 from app.memory.long_term import (
