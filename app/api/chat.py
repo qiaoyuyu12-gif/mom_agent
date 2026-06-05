@@ -16,7 +16,7 @@ import logging
 from collections import defaultdict
 from typing import AsyncIterator
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session as OrmSession
 from sse_starlette.sse import EventSourceResponse
@@ -30,6 +30,11 @@ from app.core.guards import (
 )
 from app.core.agent import AgentRequest, astream_agent_response
 from app.db.session import get_db
+from app.memory.long_term import (
+    delete_session_history,
+    get_session_messages,
+    list_sessions,
+)
 from app.memory.short_term import ShortTermMemory
 from app.rag.ragflow_client import RagflowClient
 from app.skills.registry import get_skill
@@ -131,3 +136,72 @@ async def chat_sse(payload: ChatIn, db: OrmSession = Depends(get_db)) -> EventSo
                 _active_sessions.pop(payload.session_id, None)
 
     return EventSourceResponse(event_gen())
+
+
+class SessionItem(BaseModel):
+    """会话列表条目(供侧边栏)。"""
+
+    session_id: str
+    title: str
+    message_count: int
+    updated_at: str | None = None
+
+
+@router.get("/sessions", response_model=list[SessionItem])
+def list_user_sessions(
+    user_id: str = Query(..., min_length=1, max_length=MAX_USER_ID_CHARS),
+    db: OrmSession = Depends(get_db),
+) -> list[SessionItem]:
+    """列出某用户的全部会话(按最近活跃倒序),供前端会话切换。"""
+    rows = list_sessions(db, user_id.strip())
+    return [SessionItem(**r) for r in rows]
+
+
+class HistoryMessage(BaseModel):
+    """历史消息条目(供右上角「历史聊天记录」查看)。"""
+
+    role: str
+    content: str
+    thinking: str | None = None
+    skill: str | None = None
+    created_at: str | None = None
+
+
+@router.get("/sessions/{session_id}/messages", response_model=list[HistoryMessage])
+def session_history(session_id: str, db: OrmSession = Depends(get_db)) -> list[HistoryMessage]:
+    """读取某会话归档的全部历史消息(PG messages 表,按时间正序)。"""
+    session_id = session_id.strip()
+    if not SESSION_ID_RE.fullmatch(session_id):
+        raise HTTPException(status_code=400, detail="非法 session_id")
+    rows = get_session_messages(db, session_id)
+    return [
+        HistoryMessage(
+            role=m.role,
+            content=m.content,
+            thinking=m.thinking,
+            skill=m.skill_name,
+            created_at=m.created_at.isoformat() if m.created_at else None,
+        )
+        for m in rows
+    ]
+
+
+@router.delete("/sessions/{session_id}/messages")
+def delete_session(session_id: str, db: OrmSession = Depends(get_db)) -> dict:
+    """删除某会话的历史聊天记录:PG 归档消息 + 滚动摘要 + Redis 短期窗口。
+
+    保留 session_id 本身,删除后可继续在同一会话对话。
+    """
+    session_id = session_id.strip()
+    if not SESSION_ID_RE.fullmatch(session_id):
+        raise HTTPException(status_code=400, detail="非法 session_id")
+
+    if _active_sessions.get(session_id, 0) >= 1:
+        raise HTTPException(status_code=409, detail="该 session 正在对话中,请稍后再删")
+
+    deleted = delete_session_history(db, session_id)
+    try:
+        ShortTermMemory(session_id).clear()
+    except Exception:  # noqa: BLE001
+        logger.warning("清空 Redis 短期记忆失败 session=%s", session_id, exc_info=True)
+    return {"deleted": deleted}

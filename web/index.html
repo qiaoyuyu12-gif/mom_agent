@@ -96,6 +96,17 @@
       align-self: flex-start;
     }
     #skill-badge button { background: none; border: 0; cursor: pointer; color: #047857; margin-left: 6px; }
+    #composer-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; justify-content: flex-end; }
+    #composer-toolbar .thinking-label { font-size: 13px; display: flex; align-items: center; gap: 6px; cursor: pointer; }
+    #composer-toolbar button {
+      padding: 5px 10px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    #composer-toolbar button:hover { background: #f3f4f6; }
     #input-row { display: flex; gap: 8px; align-items: flex-end; }
     #input {
       flex: 1;
@@ -137,6 +148,85 @@
     .skill-item:hover, .skill-item.active { background: #eef2ff; }
     .skill-item .name { font-weight: 600; font-size: 13px; }
     .skill-item .desc { font-size: 12px; color: var(--muted); }
+
+    /* ============== 历史聊天记录抽屉 ============== */
+    #history-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.3);
+      display: none;
+      z-index: 20;
+    }
+    #history-drawer {
+      position: fixed;
+      top: 0;
+      right: 0;
+      width: min(440px, 92vw);
+      height: 100%;
+      background: var(--panel);
+      border-left: 1px solid var(--border);
+      box-shadow: -8px 0 24px rgba(0,0,0,0.08);
+      transform: translateX(100%);
+      transition: transform 0.2s ease;
+      z-index: 21;
+      display: flex;
+      flex-direction: column;
+    }
+    #history-drawer.open { transform: translateX(0); }
+    #history-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    #history-close { background: none; border: 0; font-size: 20px; line-height: 1; cursor: pointer; color: var(--muted); }
+    .history-actions { display: flex; align-items: center; gap: 8px; }
+    #history-newchat {
+      background: var(--accent);
+      border: 0;
+      color: #fff;
+      border-radius: 6px;
+      padding: 5px 10px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    #history-newchat:hover { opacity: 0.92; }
+    #history-body { flex: 1; overflow-y: auto; padding: 8px; }
+
+    /* —— 会话列表 —— */
+    .sess-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .sess-item:hover { background: #f3f4f6; }
+    .sess-item.active { background: #eef2ff; }
+    .sess-main { flex: 1; min-width: 0; }
+    .sess-title {
+      font-size: 14px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .sess-meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .sess-del {
+      background: none;
+      border: 0;
+      color: #b91c1c;
+      cursor: pointer;
+      font-size: 16px;
+      line-height: 1;
+      padding: 2px 6px;
+      border-radius: 6px;
+      opacity: 0;
+    }
+    .sess-item:hover .sess-del { opacity: 1; }
+    .sess-del:hover { background: #fef2f2; }
+    .hist-empty, .hist-loading { color: var(--muted); font-size: 13px; padding: 12px 8px; }
   </style>
 </head>
 <body>
@@ -144,9 +234,7 @@
     <h1>mom_agent · 知识库助手</h1>
     <div class="meta">session: <span id="sid"></span></div>
     <div class="controls">
-      <label><input type="checkbox" id="thinking-toggle" /> 深度思考</label>
-      <button id="upload-skill-btn">上传 Skill</button>
-      <input type="file" id="skill-file" accept=".md" style="display:none" />
+      <button id="history-btn" title="查看历史会话">会话</button>
     </div>
   </header>
 
@@ -156,11 +244,29 @@
 
   <div id="composer">
     <div id="skill-badge"><span id="skill-badge-name"></span><button id="skill-badge-clear">×</button></div>
+    <div id="composer-toolbar">
+      <label class="thinking-label"><input type="checkbox" id="thinking-toggle" /> 深度思考</label>
+      <button id="upload-skill-btn" type="button">上传 Skill</button>
+      <input type="file" id="skill-file" webkitdirectory directory multiple style="display:none" />
+    </div>
     <div id="input-row">
       <textarea id="input" placeholder="输入消息;输入 / 选择 skill。Enter 发送,Shift+Enter 换行"></textarea>
       <button id="send">发送</button>
     </div>
   </div>
+
+  <!-- 历史会话抽屉(按 session 分组) -->
+  <div id="history-overlay"></div>
+  <aside id="history-drawer">
+    <div id="history-head">
+      <strong>历史会话</strong>
+      <div class="history-actions">
+        <button id="history-newchat" title="新开一个对话">+ 新对话</button>
+        <button id="history-close" title="关闭">×</button>
+      </div>
+    </div>
+    <div id="history-body"></div>
+  </aside>
 
 <script>
 /* =========================================================
@@ -176,21 +282,38 @@ const badgeEl    = $("#skill-badge");
 const badgeName  = $("#skill-badge-name");
 const badgeClear = $("#skill-badge-clear");
 const fileInput  = $("#skill-file");
+const historyBtn   = $("#history-btn");
+const historyDrawer= $("#history-drawer");
+const historyOverlay = $("#history-overlay");
+const historyClose = $("#history-close");
+const historyNewBtn= $("#history-newchat");
+const historyBody  = $("#history-body");
 
 // session_id 持久化(刷新页面保留对话)
-let sessionId = localStorage.getItem("mom_session_id");
-if (!sessionId) {
+function genUuid() {
   // crypto.randomUUID 仅在安全上下文(HTTPS / localhost)可用;
   // 走 0.0.0.0 或局域网 IP 访问时降级为 RFC4122 v4 手工生成,避免脚本初始化整体崩掉。
-  sessionId = (window.crypto && crypto.randomUUID)
+  return (window.crypto && crypto.randomUUID)
     ? crypto.randomUUID()
     : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
         const r = Math.random() * 16 | 0;
         return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
       });
+}
+
+let sessionId = localStorage.getItem("mom_session_id");
+if (!sessionId) {
+  sessionId = genUuid();
   localStorage.setItem("mom_session_id", sessionId);
 }
 $("#sid").textContent = sessionId.slice(0, 8);
+
+// 稳定的浏览器级 user_id:用于把同一浏览器下创建的会话归到一起(无登录体系时的轻量标识)
+let userId = localStorage.getItem("mom_user_id");
+if (!userId) {
+  userId = genUuid();
+  localStorage.setItem("mom_user_id", userId);
+}
 
 // 当前已选中 skill
 let currentSkill = null;
@@ -279,6 +402,7 @@ async function streamChat(text) {
   const body = {
     session_id: sessionId,
     message: text,
+    user_id: userId,
     skill: currentSkill || null,
     thinking: thinkingCb.checked,
   };
@@ -395,23 +519,42 @@ inputEl.addEventListener("keydown", (e) => {
 });
 
 /* =========================================================
- * 上传 Skill
+ * 上传 Skill:选择一个 skill 文件夹(渐进式披露)
+ * 文件夹须含入口 md(SKILL.md 优先;或文件夹内唯一的 .md),
+ * 入口 md 的 frontmatter 须含 name / description。
  * ========================================================= */
+
+// 以 "files" 字段提交;用 webkitRelativePath 保留目录结构
+async function uploadSkillFiles(fileList) {
+  const fd = new FormData();
+  let n = 0;
+  for (const f of fileList) {
+    // 跳过隐藏文件(.DS_Store / .git 等)
+    const rel = f.webkitRelativePath || f.name;
+    if (rel.split("/").some(seg => seg.startsWith("."))) continue;
+    fd.append("files", f, rel);
+    n++;
+  }
+  if (!n) { alert("没有可上传的文件"); return; }
+  try {
+    const r = await fetch("/skills/upload", { method: "POST", body: fd });
+    if (r.ok) {
+      const s = await r.json();
+      alert(`已上传 skill:${s.name}`);
+      await fetchSkills();
+    } else {
+      let msg = `HTTP ${r.status}`;
+      try { msg = (await r.json()).detail || msg; } catch (_) {}
+      alert(`上传失败:${msg}`);
+    }
+  } catch (e) {
+    alert(`上传失败:${e.message}`);
+  }
+}
+
 $("#upload-skill-btn").onclick = () => fileInput.click();
 fileInput.onchange = async () => {
-  const f = fileInput.files[0];
-  if (!f) return;
-  const fd = new FormData();
-  fd.append("file", f);
-  const r = await fetch("/skills/upload", { method: "POST", body: fd });
-  if (r.ok) {
-    const s = await r.json();
-    alert(`已上传 skill:${s.name}`);
-    await fetchSkills();
-  } else {
-    const txt = await r.text();
-    alert(`上传失败:${txt}`);
-  }
+  if (fileInput.files.length) await uploadSkillFiles(fileInput.files);
   fileInput.value = "";
 };
 
@@ -432,6 +575,166 @@ async function submit() {
   }
 }
 sendBtn.onclick = submit;
+
+/* =========================================================
+ * 历史会话(按 session 分组)抽屉
+ * ========================================================= */
+
+// 把一段归档消息渲染进主对话区(静态,不可流式追加)
+function renderArchivedMessages(items) {
+  messagesEl.innerHTML = "";
+  for (const m of items) {
+    if (m.role === "user") {
+      addUserMessage(m.content || "");
+      continue;
+    }
+    // assistant:静态气泡(可选思考过程折叠 + 正文)
+    const div = document.createElement("div");
+    div.className = "msg assistant";
+    div.innerHTML = `<div class="role">助手</div>`;
+    if (m.thinking) {
+      const think = document.createElement("details");
+      think.className = "think";
+      think.innerHTML = `<summary>思考过程</summary><div class="think-body"></div>`;
+      think.querySelector(".think-body").textContent = m.thinking;
+      div.appendChild(think);
+    }
+    const ans = document.createElement("div");
+    ans.className = "ans-body";
+    ans.textContent = m.content || "";
+    div.appendChild(ans);
+    messagesEl.appendChild(div);
+  }
+  scrollBottom();
+}
+
+// 渲染会话列表
+function renderSessionList(sessions) {
+  historyBody.innerHTML = "";
+  if (!sessions.length) {
+    const e = document.createElement("div");
+    e.className = "hist-empty";
+    e.textContent = "暂无历史会话。点「+ 新对话」开始。";
+    historyBody.appendChild(e);
+    return;
+  }
+  for (const s of sessions) {
+    const item = document.createElement("div");
+    item.className = "sess-item" + (s.session_id === sessionId ? " active" : "");
+
+    const main = document.createElement("div");
+    main.className = "sess-main";
+    const title = document.createElement("div");
+    title.className = "sess-title";
+    title.textContent = s.title || "(无标题)";
+    const meta = document.createElement("div");
+    meta.className = "sess-meta";
+    meta.textContent = `${s.message_count} 条 · ${fmtTime(s.updated_at)}`;
+    main.appendChild(title);
+    main.appendChild(meta);
+    main.onclick = () => switchSession(s.session_id);
+    item.appendChild(main);
+
+    const del = document.createElement("button");
+    del.className = "sess-del";
+    del.title = "删除该会话";
+    del.textContent = "🗑";
+    del.onclick = (e) => { e.stopPropagation(); deleteSession(s.session_id); };
+    item.appendChild(del);
+
+    historyBody.appendChild(item);
+  }
+}
+
+function fmtTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+async function loadSessions() {
+  historyBody.innerHTML = `<div class="hist-loading">加载中…</div>`;
+  try {
+    const r = await fetch(`/sessions?user_id=${encodeURIComponent(userId)}`);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    renderSessionList(await r.json());
+  } catch (e) {
+    historyBody.innerHTML = `<div class="hist-empty">加载失败:${e.message}</div>`;
+  }
+}
+
+function openHistory() {
+  historyDrawer.classList.add("open");
+  historyOverlay.style.display = "block";
+  loadSessions();
+}
+
+function closeHistory() {
+  historyDrawer.classList.remove("open");
+  historyOverlay.style.display = "none";
+}
+
+// 切换到某个历史会话:把它设为当前 session 并把消息载入主对话区
+async function switchSession(sid) {
+  if (sid !== sessionId) {
+    sessionId = sid;
+    localStorage.setItem("mom_session_id", sessionId);
+    $("#sid").textContent = sessionId.slice(0, 8);
+  }
+  setSkill(null);
+  messagesEl.innerHTML = `<div class="hist-loading">加载会话中…</div>`;
+  try {
+    const r = await fetch(`/sessions/${encodeURIComponent(sid)}/messages`);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    renderArchivedMessages(await r.json());
+  } catch (e) {
+    messagesEl.innerHTML = `<div class="hist-empty">加载失败:${e.message}</div>`;
+  }
+  closeHistory();
+  inputEl.focus();
+}
+
+// 删除某个历史会话(归档 + 摘要 + Redis 短期窗口)
+async function deleteSession(sid) {
+  if (!confirm("确定删除该会话的全部聊天记录?此操作不可恢复。")) return;
+  try {
+    const r = await fetch(`/sessions/${encodeURIComponent(sid)}/messages`, { method: "DELETE" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    // 删的是当前会话 → 顺手开一段新对话
+    if (sid === sessionId) newChat({ keepDrawerOpen: true });
+    await loadSessions();
+  } catch (e) {
+    alert("删除失败:" + e.message);
+  }
+}
+
+historyBtn.onclick = openHistory;
+historyClose.onclick = closeHistory;
+historyOverlay.onclick = closeHistory;
+historyNewBtn.onclick = () => newChat({ keepDrawerOpen: true });
+
+/* =========================================================
+ * 新对话:生成新的 session_id,开一段全新对话记录
+ * ========================================================= */
+function newChat(opts = {}) {
+  sessionId = genUuid();
+  localStorage.setItem("mom_session_id", sessionId);
+  $("#sid").textContent = sessionId.slice(0, 8);
+  messagesEl.innerHTML = "";   // 清空当前页面对话区(旧会话已归档在 PG,可从历史会话切回)
+  setSkill(null);
+  inputEl.value = "";
+  if (opts.keepDrawerOpen && historyDrawer.classList.contains("open")) {
+    loadSessions();            // 刷新列表里的 active 高亮
+  } else {
+    closeHistory();
+  }
+  inputEl.focus();
+}
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && historyDrawer.classList.contains("open")) closeHistory();
+});
 
 /* 初始 */
 fetchSkills();

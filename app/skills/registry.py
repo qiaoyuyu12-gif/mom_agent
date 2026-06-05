@@ -58,16 +58,40 @@ def get_skill(db: OrmSession, name: str) -> Skill | None:
     return db.get(Skill, name)
 
 
+def _folder_entry(sub: Path) -> Path | None:
+    """返回文件夹 skill 的入口 md:SKILL.md 优先,否则文件夹内唯一的 .md。"""
+    entry = sub / "SKILL.md"
+    if entry.exists():
+        return entry
+    mds = list(sub.glob("*.md"))
+    return mds[0] if len(mds) == 1 else None
+
+
 def sync_disk_to_db(db: OrmSession) -> int:
     """
-    扫描 SKILLS_DIR 下所有 .md,解析并 upsert 到 DB。
+    扫描 SKILLS_DIR,解析并 upsert 到 DB:
+    - 根目录下的 *.md       → 单文件 skill
+    - 根目录下的子文件夹     → 文件夹 skill(入口 SKILL.md / 唯一 .md)
 
-    返回成功同步的数量。解析失败的文件会被跳过(不阻塞启动)。
+    返回成功同步的数量。解析失败的条目会被跳过(不阻塞启动)。
     """
     count = 0
-    for f in skills_dir().glob("*.md"):
+    d = skills_dir()
+    for f in d.glob("*.md"):
         try:
             parsed = parse_skill_file(f)
+        except Exception:
+            continue
+        upsert_skill(db, parsed)
+        count += 1
+    for sub in d.iterdir():
+        if not sub.is_dir():
+            continue
+        entry = _folder_entry(sub)
+        if entry is None:
+            continue
+        try:
+            parsed = parse_skill_file(entry)
         except Exception:
             continue
         upsert_skill(db, parsed)
