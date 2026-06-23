@@ -144,3 +144,109 @@ def format_facts_for_prompt(facts: List[MemoryFact]) -> str:
         "\n".join(lines),
         "仅在与当前问题相关时参考;若与用户当前表达冲突,以当前表达为准。",
     )
+
+
+# ─── 历史会话查询 ──────────────────────────────────
+
+def list_sessions(
+    db: OrmSession,
+    user_id: str,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[dict]:
+    """
+    按 user_id 列出会话，按 updated_at 降序。
+    返回含 session_id / title / updated_at / message_count 的 dict 列表。
+    user_id 为空时返回空列表。
+    """
+    # user_id 为空直接返回空列表，避免无效查询
+    if not user_id:
+        return []
+
+    # 查询该用户的所有会话，按最近更新时间降序排列
+    sessions = list(
+        db.execute(
+            select(SessionRow)
+            .where(SessionRow.user_id == user_id)
+            .order_by(desc(SessionRow.updated_at))
+            .limit(limit)
+            .offset(offset)
+        ).scalars().all()
+    )
+
+    result = []
+    for s in sessions:
+        # 取该会话第一条用户消息作为标题来源
+        first_content = db.execute(
+            select(Message.content)
+            .where(Message.session_id == s.id, Message.role == "user")
+            .order_by(Message.created_at)
+            .limit(1)
+        ).scalar()
+
+        # 统计该会话的 user/assistant 消息总数
+        msg_count = db.execute(
+            select(func.count())
+            .select_from(Message)
+            .where(
+                Message.session_id == s.id,
+                Message.role.in_(["user", "assistant"]),
+            )
+        ).scalar() or 0
+
+        result.append({
+            "session_id": s.id,
+            # 标题截取前 30 字符；无用户消息时回退为"新对话"
+            "title": first_content[:30] if first_content else "新对话",
+            "updated_at": s.updated_at.isoformat(),
+            "message_count": int(msg_count),
+        })
+
+    return result
+
+
+def get_session_messages(
+    db: OrmSession,
+    session_id: str,
+    user_id: str,
+) -> list[Message]:
+    """
+    返回指定会话的 user/assistant 消息列表（按 created_at 升序）。
+    若 session 不存在或 user_id 不匹配，抛 ValueError。
+    """
+    # 校验会话存在且属于该用户
+    s = db.get(SessionRow, session_id)
+    if s is None or s.user_id != user_id:
+        raise ValueError(f"session {session_id!r} not found for user {user_id!r}")
+
+    # 按时间升序返回对话消息（仅 user/assistant 角色）
+    return list(
+        db.execute(
+            select(Message)
+            .where(
+                Message.session_id == session_id,
+                Message.role.in_(["user", "assistant"]),
+            )
+            .order_by(Message.created_at)
+        ).scalars().all()
+    )
+
+
+def delete_session_record(
+    db: OrmSession,
+    session_id: str,
+    user_id: str,
+) -> bool:
+    """
+    删除指定会话（DB 层 CASCADE 自动清除 messages / session_summaries）。
+    若 session 不存在或 user_id 不匹配，抛 ValueError。
+    """
+    # 校验会话归属，防止越权删除
+    s = db.get(SessionRow, session_id)
+    if s is None or s.user_id != user_id:
+        raise ValueError(f"session {session_id!r} not found for user {user_id!r}")
+
+    # 删除会话，CASCADE 会自动清理关联的消息和摘要
+    db.delete(s)
+    db.commit()
+    return True
