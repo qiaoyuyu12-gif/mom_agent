@@ -167,10 +167,14 @@ function init() {
 // 从后端加载会话列表（reset=true 时重置列表，false 时追加）
 async function loadSessions(reset) {
   if (reset === undefined) reset = true;
+  const prevOffset = S.sessionsOffset; // 保存当前 offset，失败时恢复
   if (reset) { S.sessionsOffset = 0; }
   var url = '/history/sessions?user_id=' + enc(S.userId) + '&limit=' + S.sessionsLimit + '&offset=' + S.sessionsOffset;
   const res = await fetch(url);
-  if (!res.ok) return;
+  if (!res.ok) {
+    S.sessionsOffset = prevOffset; // 恢复，避免状态错乱
+    return;
+  }
   const data = await res.json();
   if (reset) {
     renderSidebar(data);
@@ -202,7 +206,7 @@ function makeSessionItem(s) {
   div.dataset.sid = s.session_id;
   div.innerHTML =
     '<div class="session-title">' + esc(s.title) + '</div>' +
-    '<div class="session-meta">' + relTime(s.updated_at) + ' - ' + s.message_count + ' 条</div>' +
+    '<div class="session-meta">' + relTime(s.updated_at) + ' - ' + esc(String(s.message_count)) + ' 条</div>' +
     '<button class="delete-btn" title="删除此对话">X</button>';
   div.addEventListener('click', function(e) {
     if (!e.target.closest('.delete-btn')) switchSession(s.session_id);
@@ -330,6 +334,13 @@ async function sendMessage() {
       body: JSON.stringify({ session_id: S.sessionId, user_id: S.userId, message: text, skill: skill, thinking: thinking }),
     });
 
+    // 检查 HTTP 状态码，非 2xx 时提前退出并显示错误
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      S.answerEl.textContent = '[请求失败 ' + res.status + '] ' + errText;
+      return;
+    }
+
     const reader  = res.body.getReader();
     const decoder = new TextDecoder();
     var buf = '';
@@ -344,14 +355,15 @@ async function sendMessage() {
       buf = parts.pop(); // 保留未完成的数据
 
       for (var i = 0; i < parts.length; i++) {
+        // 解析 SSE 事件类型和数据（支持多行 data 字段正确拼接）
         var event = 'message';
-        var data = '';
-        // 解析 SSE 事件类型和数据
+        var dataLines = [];
         const lines = parts[i].split('\n');
         for (var j = 0; j < lines.length; j++) {
           if (lines[j].startsWith('event: ')) event = lines[j].slice(7).trim();
-          else if (lines[j].startsWith('data: ')) data = lines[j].slice(6);
+          else if (lines[j].startsWith('data: ')) dataLines.push(lines[j].slice(6));
         }
+        var data = dataLines.join('\n');
 
         if (event === 'thought') {
           // 收到思考过程片段，追加到思考块
@@ -379,9 +391,11 @@ async function sendMessage() {
   } catch (e) {
     S.answerEl.textContent = '[网络错误] ' + e.message;
   } finally {
-    // 无论成功失败，恢复发送状态并刷新会话列表
+    // 无论成功失败，恢复发送状态并清空流式元素引用，刷新会话列表
     S.sending = false;
     document.getElementById('send-btn').disabled = false;
+    S.answerEl = null;   // 清空流式回答元素引用
+    S.thinkWrap = null;  // 清空流式消息容器引用
     loadSessions();
   }
 }
