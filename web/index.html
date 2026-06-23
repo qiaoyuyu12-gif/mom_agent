@@ -255,8 +255,11 @@ async function confirmDelete(sessionId) {
   if (!confirm('确认删除这条对话？')) return;
   const res = await fetch('/history/sessions/' + sessionId + '?user_id=' + enc(S.userId), { method: 'DELETE' });
   if (!res.ok) { alert('删除失败'); return; }
-  if (sessionId === S.sessionId) startNewChat();
-  loadSessions();
+  if (sessionId === S.sessionId) {
+    startNewChat(); // startNewChat 内部已调用 loadSessions()
+  } else {
+    loadSessions();
+  }
 }
 
 // 添加静态消息气泡（用于加载历史消息）

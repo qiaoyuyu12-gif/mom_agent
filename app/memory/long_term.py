@@ -223,7 +223,7 @@ def get_session_messages(
     """
     # 校验会话存在且属于该用户
     s = db.get(SessionRow, session_id)
-    if s is None or s.user_id != user_id:
+    if not user_id or s is None or s.user_id != user_id:
         # 故意合并"不存在"和"权限不符"两种情况，防止 session 存在性枚举攻击
         raise ValueError(f"session {session_id!r} not found for user {user_id!r}")
 
@@ -251,7 +251,7 @@ def delete_session_record(
     """
     # 校验会话归属，防止越权删除
     s = db.get(SessionRow, session_id)
-    if s is None or s.user_id != user_id:
+    if not user_id or s is None or s.user_id != user_id:
         # 故意合并"不存在"和"权限不符"两种情况，防止 session 存在性枚举攻击
         raise ValueError(f"session {session_id!r} not found for user {user_id!r}")
 

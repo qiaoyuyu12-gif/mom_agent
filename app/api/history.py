@@ -4,6 +4,9 @@
 GET  /history/sessions                       — 列出指定用户的会话（分页）
 GET  /history/sessions/{session_id}/messages  — 获取某会话的完整消息
 DELETE /history/sessions/{session_id}         — 删除会话（DB + Redis）
+
+安全说明：user_id 由客户端 localStorage 生成的 UUID 充当，无服务端鉴权。
+本系统预期部署于内网/SSO 边界内。如需公网暴露请在此处添加 JWT/Session 校验。
 """
 
 from __future__ import annotations

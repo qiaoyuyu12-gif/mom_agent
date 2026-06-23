@@ -180,3 +180,80 @@ def test_delete_session_record_ok():
     assert result is True
     db.delete.assert_called_once_with(sess)
     db.commit.assert_called_once()
+
+
+# ── Task 3: FastAPI HTTP 层测试 ──────────────────────────────
+
+def test_api_get_messages_returns_404_when_session_not_found(monkeypatch):
+    """GET /history/sessions/{id}/messages — session 不存在时返回 404。"""
+    from fastapi.testclient import TestClient
+    from unittest.mock import MagicMock
+    from app.db.session import get_db
+
+    # 必须在 import 之前 mock get_settings，避免 .env 校验失败
+    mock_settings = MagicMock()
+    mock_settings.REDIS_URL = "redis://localhost:6379/0"
+    mock_settings.REDIS_TTL_SECONDS = 86400
+    monkeypatch.setattr("app.config.get_settings", lambda: mock_settings)
+    monkeypatch.setattr("app.memory.short_term.get_settings", lambda: mock_settings)
+
+    from app.main import create_app
+    test_app = create_app()
+
+    mock_db = MagicMock()
+    mock_db.get.return_value = None  # session 不存在
+    test_app.dependency_overrides[get_db] = lambda: mock_db
+
+    client = TestClient(test_app)
+    resp = client.get("/history/sessions/nonexistent/messages?user_id=u1")
+    assert resp.status_code == 404
+    assert "会话不存在" in resp.json()["detail"]
+
+
+def test_api_list_sessions_empty_user_id_returns_empty_list(monkeypatch):
+    """GET /history/sessions?user_id= — user_id 为空返回 []。"""
+    from fastapi.testclient import TestClient
+    from unittest.mock import MagicMock
+    from app.db.session import get_db
+
+    mock_settings = MagicMock()
+    mock_settings.REDIS_URL = "redis://localhost:6379/0"
+    mock_settings.REDIS_TTL_SECONDS = 86400
+    monkeypatch.setattr("app.config.get_settings", lambda: mock_settings)
+    monkeypatch.setattr("app.memory.short_term.get_settings", lambda: mock_settings)
+
+    from app.main import create_app
+    test_app = create_app()
+
+    mock_db = MagicMock()
+    test_app.dependency_overrides[get_db] = lambda: mock_db
+
+    client = TestClient(test_app)
+    resp = client.get("/history/sessions?user_id=")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_api_delete_session_returns_404_when_not_found(monkeypatch):
+    """DELETE /history/sessions/{id} — session 不存在时返回 404。"""
+    from fastapi.testclient import TestClient
+    from unittest.mock import MagicMock
+    from app.db.session import get_db
+
+    mock_settings = MagicMock()
+    mock_settings.REDIS_URL = "redis://localhost:6379/0"
+    mock_settings.REDIS_TTL_SECONDS = 86400
+    monkeypatch.setattr("app.config.get_settings", lambda: mock_settings)
+    monkeypatch.setattr("app.memory.short_term.get_settings", lambda: mock_settings)
+
+    from app.main import create_app
+    test_app = create_app()
+
+    mock_db = MagicMock()
+    mock_db.get.return_value = None
+    test_app.dependency_overrides[get_db] = lambda: mock_db
+
+    client = TestClient(test_app)
+    resp = client.delete("/history/sessions/nonexistent?user_id=u1")
+    assert resp.status_code == 404
+    assert "会话不存在" in resp.json()["detail"]
