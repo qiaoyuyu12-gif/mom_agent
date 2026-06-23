@@ -100,6 +100,6 @@ def api_delete_session(
     try:
         ShortTermMemory(session_id).clear()
     except Exception:
-        logger.warning("清除 Redis 短期记忆失败 session=%s", session_id)
+        logger.warning("清除 Redis 短期记忆失败 session=%s", session_id, exc_info=True)
 
     return DeleteResult(deleted=session_id)
