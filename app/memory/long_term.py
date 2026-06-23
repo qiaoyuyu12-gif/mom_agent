@@ -159,50 +159,57 @@ def list_sessions(
     返回含 session_id / title / updated_at / message_count 的 dict 列表。
     user_id 为空时返回空列表。
     """
-    # user_id 为空直接返回空列表，避免无效查询
     if not user_id:
         return []
 
-    # 查询该用户的所有会话，按最近更新时间降序排列
-    sessions = list(
-        db.execute(
-            select(SessionRow)
-            .where(SessionRow.user_id == user_id)
-            .order_by(desc(SessionRow.updated_at))
-            .limit(limit)
-            .offset(offset)
-        ).scalars().all()
+    # 每个 session 的最早 user 消息 id（用于关联取标题内容）
+    first_msg_subq = (
+        select(
+            Message.session_id.label("sid"),
+            func.min(Message.id).label("min_id"),
+        )
+        .where(Message.role == "user")
+        .group_by(Message.session_id)
+        .subquery()
     )
 
-    result = []
-    for s in sessions:
-        # 取该会话第一条用户消息作为标题来源
-        first_content = db.execute(
-            select(Message.content)
-            .where(Message.session_id == s.id, Message.role == "user")
-            .order_by(Message.created_at)
-            .limit(1)
-        ).scalar()
+    # 每个 session 的 user+assistant 消息总数
+    count_subq = (
+        select(
+            Message.session_id.label("sid"),
+            func.count().label("cnt"),
+        )
+        .where(Message.role.in_(["user", "assistant"]))
+        .group_by(Message.session_id)
+        .subquery()
+    )
 
-        # 统计该会话的 user/assistant 消息总数
-        msg_count = db.execute(
-            select(func.count())
-            .select_from(Message)
-            .where(
-                Message.session_id == s.id,
-                Message.role.in_(["user", "assistant"]),
-            )
-        ).scalar() or 0
+    # 单次 JOIN 查询：避免 N+1 问题，一次性取 session、首条用户消息内容、消息总数
+    rows = db.execute(
+        select(
+            SessionRow,
+            Message.content.label("first_content"),
+            count_subq.c.cnt,
+        )
+        .where(SessionRow.user_id == user_id)
+        .outerjoin(first_msg_subq, first_msg_subq.c.sid == SessionRow.id)
+        .outerjoin(Message, Message.id == first_msg_subq.c.min_id)
+        .outerjoin(count_subq, count_subq.c.sid == SessionRow.id)
+        .order_by(desc(SessionRow.updated_at))
+        .limit(limit)
+        .offset(offset)
+    ).all()
 
-        result.append({
-            "session_id": s.id,
+    return [
+        {
+            "session_id": row[0].id,
             # 标题截取前 30 字符；无用户消息时回退为"新对话"
-            "title": first_content[:30] if first_content else "新对话",
-            "updated_at": s.updated_at.isoformat(),
-            "message_count": int(msg_count),
-        })
-
-    return result
+            "title": row[1][:30] if row[1] else "新对话",
+            "updated_at": row[0].updated_at.isoformat(),
+            "message_count": int(row[2] or 0),
+        }
+        for row in rows
+    ]
 
 
 def get_session_messages(
@@ -217,6 +224,7 @@ def get_session_messages(
     # 校验会话存在且属于该用户
     s = db.get(SessionRow, session_id)
     if s is None or s.user_id != user_id:
+        # 故意合并"不存在"和"权限不符"两种情况，防止 session 存在性枚举攻击
         raise ValueError(f"session {session_id!r} not found for user {user_id!r}")
 
     # 按时间升序返回对话消息（仅 user/assistant 角色）
@@ -244,6 +252,7 @@ def delete_session_record(
     # 校验会话归属，防止越权删除
     s = db.get(SessionRow, session_id)
     if s is None or s.user_id != user_id:
+        # 故意合并"不存在"和"权限不符"两种情况，防止 session 存在性枚举攻击
         raise ValueError(f"session {session_id!r} not found for user {user_id!r}")
 
     # 删除会话，CASCADE 会自动清理关联的消息和摘要
