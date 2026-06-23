@@ -103,6 +103,13 @@ class Settings(BaseSettings):
     # ---------- Skill ----------
     SKILLS_DIR: str = "./skills"
 
+    # ---------- NoDeskClaw Agent Protocol (NAP) ----------
+    # 平台侧注册时填写的 API Key；留空则不校验鉴权头（仅内网部署时可留空）
+    NAP_API_KEY: Optional[str] = None
+    # /meta 中暴露的 Agent 展示名与描述（可通过 .env 覆盖）
+    NAP_AGENT_NAME: str = "MOM 智能问答助手"
+    NAP_AGENT_DESCRIPTION: str = "回答 MOM 制造运营管理系统相关问题（生产计划、质量管理、设备管理、物料追踪等）"
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @field_validator("RAGFLOW_DATASET_IDS")

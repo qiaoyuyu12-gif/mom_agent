@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目定位
 
-`mom_agent` 是嵌入式知识库 Agent 助手:**只负责检索之后的「记忆 + skill + 思考开关 + 生成」**。知识库的手册上传、切片、索引、检索全部交给外部已部署的 **RAGFlow**;大模型交给外部已部署的 **vLLM(Qwen3,OpenAI 兼容端点)**。本仓库不启动也不实现这两者。
+`mom_agent` 是 **MOM(Manufacturing Operations Management,制造运营管理)系统的 AI 问答助手**:只负责检索之后的「记忆 + skill + 思考开关 + 生成」,回答用户关于 MOM 系统的业务问题(生产计划、质量管理、设备管理、物料追踪等)。知识库的手册上传、切片、索引、检索全部交给外部已部署的 **RAGFlow**;大模型交给外部已部署的 **vLLM(Qwen3,OpenAI 兼容端点)**。本仓库不启动也不实现这两者。
 
 技术栈:FastAPI + LangChain 1.x(`create_agent` + middleware) + Redis(短期记忆) + PostgreSQL(长期记忆,无 pgvector)。
 
