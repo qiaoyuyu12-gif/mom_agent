@@ -15,12 +15,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import List
 
 import redis
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 # 角色 → 工厂函数,把存储记录还原为 LangChain 消息
@@ -104,8 +107,14 @@ class ShortTermMemory:
         self._cli.expire(self._msg_key, self._ttl)
 
     def clear(self) -> None:
-        """清空(用于测试/调试)。"""
-        self._cli.delete(self._msg_key, self._sum_key)
+        """删除该 session 的所有 Redis 键。Redis 不可达时只记日志，不抛异常。"""
+        try:
+            pipe = self._cli.pipeline()
+            pipe.delete(self._msg_key)
+            pipe.delete(self._sum_key)
+            pipe.execute()
+        except Exception:
+            logger.warning("ShortTermMemory.clear 失败 session=%s", self.session_id)
 
     # ---------- 滚动摘要缓存 ----------
     def get_summary(self) -> str:
