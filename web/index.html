@@ -59,6 +59,19 @@
     .think-content { display: none; margin-top: 4px; white-space: pre-wrap; color: #666; }
     .think-block.open .think-content { display: block; }
 
+    /* 加载动画 */
+    .loading-dots { display: inline-flex; gap: 4px; padding: 2px 0; }
+    .loading-dots span {
+      width: 6px; height: 6px; border-radius: 50%; background: #94a3b8;
+      animation: dot-bounce 1.2s infinite ease-in-out;
+    }
+    .loading-dots span:nth-child(2) { animation-delay: 0.2s; }
+    .loading-dots span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes dot-bounce {
+      0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+      40%            { transform: scale(1);   opacity: 1;   }
+    }
+
     /* 输入区 */
     #input-area { padding: 14px 20px; border-top: 1px solid #e5e7eb; background: #fff; flex-shrink: 0; }
     #toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
@@ -99,6 +112,23 @@
     .skill-opt:hover { background: #f1f5f9; }
     .skill-opt-name { font-weight: 500; }
     .skill-opt-desc { font-size: 11px; color: #888; margin-top: 1px; }
+    /* 步骤展示区域 */
+    .step-area { font-size: 12px; margin-bottom: 8px; }
+    .step-header {
+      display: flex; align-items: center; gap: 5px;
+      color: #94a3b8; cursor: pointer; user-select: none; padding: 2px 0;
+    }
+    .step-header:hover { color: #64748b; }
+    .step-toggle-icon { font-size: 10px; }
+    .step-list { padding: 4px 0 2px 16px; }
+    .step-item {
+      display: flex; align-items: flex-start; gap: 6px;
+      padding: 2px 0; color: #64748b; line-height: 1.5;
+    }
+    .step-item.running { color: #0f3460; }
+    .step-item.error   { color: #dc2626; }
+    .step-icon { min-width: 14px; font-size: 11px; margin-top: 2px; }
+
   </style>
 </head>
 <body>
@@ -137,15 +167,21 @@
 <script>
 // 状态：存储应用全局状态
 const S = {
-  userId: null,        // 当前用户ID，持久化到 localStorage
-  sessionId: null,     // 当前会话ID，持久化到 localStorage
-  skills: [],          // 已加载的 skill 列表
-  sessionsOffset: 0,   // 分页偏移量
-  sessionsLimit: 20,   // 每页会话数
-  hasMore: false,      // 是否还有更多会话
-  sending: false,      // 是否正在发送消息（防止重复提交）
-  answerEl: null,      // 当前流式回答的 DOM 元素
-  thinkWrap: null,     // 当前流式消息的容器 DOM 元素
+  userId: null,          // 当前用户ID，持久化到 localStorage
+  sessionId: null,       // 当前会话ID，持久化到 localStorage
+  skills: [],            // 已加载的 skill 列表
+  sessionsOffset: 0,     // 分页偏移量
+  sessionsLimit: 20,     // 每页会话数
+  hasMore: false,        // 是否还有更多会话
+  sending: false,        // 是否正在发送消息（防止重复提交）
+  answerEl: null,        // 答案文本写入此元素（answerContentEl）
+  loadingEl: null,       // 加载动画 DOM 元素
+  bubbleEl: null,        // msg-bubble 元素（错误显示时用）
+  thinkWrap: null,       // 当前流式消息的容器 DOM 元素
+  stepAreaEl: null,      // 步骤展示区域 DOM 元素
+  stepListEl: null,      // 步骤列表 DOM 元素
+  abortCtrl: null,       // 当前请求的 AbortController，用于在切换 session 时取消
+  firstAnswer: false,    // 是否已收到第一个 answer 事件（用于清除加载动画）
 };
 
 // 启动：初始化用户ID和会话ID，加载数据并绑定事件
@@ -228,6 +264,14 @@ function highlightSession(sid) {
 // 切换到指定会话，加载该会话的历史消息
 async function switchSession(sessionId) {
   if (sessionId === S.sessionId) return;
+
+  // 若有正在进行的请求，先中断它，避免 SSE 事件更新已脱离 DOM 的元素
+  if (S.sending && S.abortCtrl) {
+    S.abortCtrl.abort();
+    // abortCtrl.abort() 会让 fetch 抛出 AbortError，
+    // sendMessage 的 catch/finally 会负责清理 S.sending / S.answerEl
+  }
+
   S.sessionId = sessionId;
   localStorage.setItem('mom_session_id', sessionId);
   highlightSession(sessionId);
@@ -244,6 +288,8 @@ async function switchSession(sessionId) {
 
 // 新建对话：生成新会话ID，清空消息区，刷新侧边栏
 function startNewChat() {
+  // 若有正在进行的请求，先中断
+  if (S.sending && S.abortCtrl) S.abortCtrl.abort();
   S.sessionId = crypto.randomUUID();
   localStorage.setItem('mom_session_id', S.sessionId);
   document.getElementById('messages').innerHTML = '';
@@ -286,17 +332,59 @@ function appendBubble(role, content, thinking) {
   return bubble;
 }
 
-// 创建流式回答的空气泡
+// 创建流式回答的气泡（含步骤区域 + 加载动画 + 答案区域）
 function startStreamBubble() {
   const container = document.getElementById('messages');
   const wrap = document.createElement('div');
   wrap.className = 'msg assistant';
+
   const bubble = document.createElement('div');
   bubble.className = 'msg-bubble';
+
+  // 步骤展示区域（初始隐藏，首个 status 事件到达时显示）
+  const stepArea = document.createElement('div');
+  stepArea.className = 'step-area';
+  stepArea.style.display = 'none';
+
+  const stepHeader = document.createElement('div');
+  stepHeader.className = 'step-header';
+  stepHeader.innerHTML = '<span class="step-toggle-icon">▼</span> 执行过程';
+  stepHeader.addEventListener('click', function() {
+    const list = stepArea.querySelector('.step-list');
+    const icon = stepArea.querySelector('.step-toggle-icon');
+    if (!list) return;
+    const collapsed = list.style.display === 'none';
+    list.style.display = collapsed ? '' : 'none';
+    icon.textContent = collapsed ? '▼' : '▶';
+  });
+
+  const stepList = document.createElement('div');
+  stepList.className = 'step-list';
+  stepArea.appendChild(stepHeader);
+  stepArea.appendChild(stepList);
+  bubble.appendChild(stepArea);
+
+  // 加载动画（等待首个事件到达前显示）
+  const loadingEl = document.createElement('div');
+  loadingEl.className = 'loading-dots';
+  loadingEl.innerHTML = '<span></span><span></span><span></span>';
+  bubble.appendChild(loadingEl);
+
+  // 答案文本容器（独立 div，避免 textContent 清除步骤区子元素）
+  const answerContentEl = document.createElement('div');
+  answerContentEl.style.display = 'none';
+  bubble.appendChild(answerContentEl);
+
   wrap.appendChild(bubble);
   container.appendChild(wrap);
-  S.answerEl = bubble;
-  S.thinkWrap = wrap;
+
+  S.answerEl        = answerContentEl;   // 流式回答写入此元素
+  S.loadingEl       = loadingEl;
+  S.stepAreaEl      = stepArea;
+  S.stepListEl      = stepList;
+  S.bubbleEl        = bubble;            // 错误信息时直接写 bubble
+  S.thinkWrap       = wrap;
+  S.firstAnswer     = false;
   scrollToBottom();
 }
 
@@ -304,6 +392,43 @@ function startStreamBubble() {
 function scrollToBottom() {
   const c = document.getElementById('messages');
   c.scrollTop = c.scrollHeight;
+}
+
+// 处理后端 status 事件：在步骤列表中新增或更新对应步骤
+function handleStatus(d) {
+  if (!S.stepListEl || !S.stepAreaEl) return;
+  const stage   = d.stage  || '';
+  const label   = d.label  || stage;
+  const isStart = stage.endsWith('_start');
+  // baseStage 统一 _start/_done/_load 为同一条目
+  const baseStage = stage.replace(/_start$/, '').replace(/_done$/, '').replace(/_load$/, '');
+  const ok  = d.ok !== false;
+  const cls  = isStart ? 'running' : (ok ? 'done' : 'error');
+  const icon = isStart ? '◌'       : (ok ? '✓'   : '✗');
+
+  // 首个 status 到达：显示步骤区，展开列表，隐藏加载动画
+  if (S.stepAreaEl.style.display === 'none') {
+    S.stepAreaEl.style.display = '';
+    S.stepListEl.style.display = '';
+    if (S.loadingEl) S.loadingEl.style.display = 'none';
+  }
+
+  // 更新已存在的同类步骤，否则追加新步骤
+  const existing = S.stepListEl.querySelector('[data-base="' + baseStage + '"]');
+  if (existing) {
+    existing.className = 'step-item ' + cls;
+    existing.querySelector('.step-icon').textContent = icon;
+    existing.querySelector('.step-label').textContent = label;
+  } else {
+    const item = document.createElement('div');
+    item.className = 'step-item ' + cls;
+    item.dataset.base = baseStage;
+    item.innerHTML =
+      '<span class="step-icon">' + icon + '</span>' +
+      '<span class="step-label">' + esc(label) + '</span>';
+    S.stepListEl.appendChild(item);
+  }
+  scrollToBottom();
 }
 
 // 发送消息 + SSE 流式接收
@@ -321,9 +446,10 @@ async function sendMessage() {
   input.style.height = 'auto';
   S.sending = true;
   document.getElementById('send-btn').disabled = true;
+  S.abortCtrl = new AbortController();
 
   appendBubble('user', text);   // 立即显示用户消息
-  startStreamBubble();           // 创建空的助手回复气泡
+  startStreamBubble();           // 创建带加载动画的助手回复气泡
 
   var thinkBuf = '';    // 思考过程缓冲
   var answerBuf = '';   // 回答内容缓冲
@@ -335,12 +461,14 @@ async function sendMessage() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: S.sessionId, user_id: S.userId, message: text, skill: skill, thinking: thinking }),
+      signal: S.abortCtrl.signal,   // 绑定 AbortController，支持切换 session 时取消
     });
 
     // 检查 HTTP 状态码，非 2xx 时提前退出并显示错误
     if (!res.ok) {
       const errText = await res.text().catch(() => '');
-      S.answerEl.textContent = '[请求失败 ' + res.status + '] ' + errText;
+      const el = S.bubbleEl || S.answerEl;
+      if (el) el.textContent = '[请求失败 ' + res.status + '] ' + errText;
       return;
     }
 
@@ -352,7 +480,7 @@ async function sendMessage() {
     while (true) {
       const chunk = await reader.read();
       if (chunk.done) break;
-      buf += decoder.decode(chunk.value, { stream: true });
+      buf += decoder.decode(chunk.value, { stream: true }).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
       // 按双换行分割 SSE 事件块
       const parts = buf.split('\n\n');
       buf = parts.pop(); // 保留未完成的数据
@@ -376,29 +504,56 @@ async function sendMessage() {
             thinkDiv.className = 'think-block';
             thinkDiv.innerHTML = '思考过程 <div class="think-content"></div>';
             thinkDiv.addEventListener('click', function() { thinkDiv.classList.toggle('open'); });
-            S.thinkWrap.insertBefore(thinkDiv, S.answerEl);
+            if (S.thinkWrap && S.bubbleEl) S.thinkWrap.insertBefore(thinkDiv, S.bubbleEl);
           }
-          thinkDiv.querySelector('.think-content').textContent = thinkBuf;
+          if (thinkDiv) thinkDiv.querySelector('.think-content').textContent = thinkBuf;
         } else if (event === 'answer') {
-          // 收到回答片段，追加到回答气泡
+          // 收到第一个 answer 事件时：隐藏加载动画，折叠步骤区，显示答案区
+          if (!S.firstAnswer) {
+            S.firstAnswer = true;
+            if (S.loadingEl) S.loadingEl.style.display = 'none';
+            if (S.answerEl) S.answerEl.style.display = '';     // 显示答案 div
+            if (S.stepAreaEl && S.stepAreaEl.style.display !== 'none') {
+              S.stepListEl.style.display = 'none';              // 折叠步骤列表
+              const icon = S.stepAreaEl.querySelector('.step-toggle-icon');
+              if (icon) icon.textContent = '▶';
+            }
+          }
+          // 追加答案内容（直接 textContent，不影响步骤区）
           answerBuf += data;
-          S.answerEl.textContent = answerBuf;
-          scrollToBottom();
+          if (S.answerEl) {
+            S.answerEl.textContent = answerBuf;
+            scrollToBottom();
+          }
+        } else if (event === 'status') {
+          // 收到步骤状态事件，更新步骤展示区域
+          try { handleStatus(JSON.parse(data)); } catch(ex) {}
         } else if (event === 'error') {
-          // 收到错误事件，显示错误信息
-          try { S.answerEl.textContent = '[错误] ' + JSON.parse(data).error; }
-          catch(ex) { S.answerEl.textContent = '[错误] ' + data; }
+          // 收到错误事件，显示在 bubble 级别（会清除所有子元素）
+          const el = S.bubbleEl || S.answerEl;
+          if (el) {
+            try { el.textContent = '[错误] ' + JSON.parse(data).error; }
+            catch(ex) { el.textContent = '[错误] ' + data; }
+          }
         }
       }
     }
   } catch (e) {
-    S.answerEl.textContent = '[网络错误] ' + e.message;
+    // AbortError 是用户主动切换 session 触发的，不显示错误
+    if (e.name !== 'AbortError') {
+      const el = S.bubbleEl || S.answerEl;
+      if (el) el.textContent = '[网络错误] ' + e.message;
+    }
   } finally {
-    // 无论成功失败，恢复发送状态并清空流式元素引用，刷新会话列表
-    S.sending = false;
+    S.sending        = false;
+    S.abortCtrl      = null;
     document.getElementById('send-btn').disabled = false;
-    S.answerEl = null;   // 清空流式回答元素引用
-    S.thinkWrap = null;  // 清空流式消息容器引用
+    S.answerEl       = null;
+    S.loadingEl      = null;
+    S.bubbleEl       = null;
+    S.thinkWrap      = null;
+    S.stepAreaEl     = null;
+    S.stepListEl     = null;
     loadSessions();
   }
 }

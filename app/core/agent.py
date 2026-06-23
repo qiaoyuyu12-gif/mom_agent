@@ -69,33 +69,16 @@ def _build_agent(thinking: bool):
     构造一个 LangChain Agent。
 
     - 主模型:开/关思考各一份(其余参数共享)。
-    - SummarizationMiddleware:用专属非流式摘要器,避免 token 混入主流式。
-    - ModelCallLimitMiddleware:run_limit 控制单次请求最多调用模型次数,
-      thread_limit 控制 session 累计上限,超限时 exit_behavior="end" 优雅停止。
+    - 中间件由 build_harness_middleware() 统一装配(SummarizationMiddleware +
+      ModelCallLimitMiddleware + 可选 PII/Retry/Progress/CitationGuard)。
     """
-    s = get_settings()
-
     main_model = _make_llm(thinking)
-    summarizer = get_summarizer_llm()
-
-    summarization = SummarizationMiddleware(
-        model=summarizer,
-        # 触发条件:历史 token 数 ≥ 阈值
-        trigger=("tokens", s.MAX_HISTORY_TOKENS),
-        # 摘要后保留最近 N 条消息(其余被替换为摘要)
-        keep=("messages", s.KEEP_RECENT_MESSAGES),
-    )
-    call_limit = ModelCallLimitMiddleware(
-        thread_limit=s.MODEL_CALL_THREAD_LIMIT,
-        run_limit=s.MODEL_CALL_RUN_LIMIT,
-        exit_behavior="end",
-    )
 
     return create_agent(
         model=main_model,
         tools=[],                       # 当前阶段无外部工具
         system_prompt=SYSTEM_PROMPT,
-        middleware=[summarization, call_limit],
+        middleware=build_harness_middleware(),
     )
 
 
@@ -162,6 +145,8 @@ async def astream_agent_response(
     # 2. 短期历史 + RAG + 长期事实 + skill
     history: list[BaseMessage] = short_term.messages()
 
+    # 步骤 1：知识库检索
+    yield "status", {"stage": "rag_start", "label": "检索知识库…"}
     rag_started = perf_counter()
     rag_error: str | None = None
     try:
@@ -172,14 +157,29 @@ async def astream_agent_response(
     rag_ms = round((perf_counter() - rag_started) * 1000, 1)
     rag_context = format_chunks_for_prompt(chunks)
 
+    # 步骤 1 完成
+    if rag_error:
+        yield "status", {"stage": "rag_done", "label": "知识库检索失败", "ok": False}
+    else:
+        n = len(chunks)
+        label = f"知识库检索完成，召回 {n} 条" if n else "知识库检索完成（无匹配）"
+        yield "status", {"stage": "rag_done", "label": label, "ok": True, "count": n}
+
+    # 步骤 2：长期记忆检索（仅当 user_id 存在时）
+    if req.user_id:
+        yield "status", {"stage": "memory_start", "label": "检索历史记忆…"}
     facts = search_facts(db, req.user_id, req.message, limit=5) if req.user_id else []
     facts_context = format_facts_for_prompt(facts)
+    if req.user_id:
+        yield "status", {"stage": "memory_done", "label": f"记忆检索完成，找到 {len(facts)} 条", "ok": True, "count": len(facts)}
 
     skill_instruction = ""
     if req.skill_name:
         skill = load_runtime_skill(db, req.skill_name)
         if skill is not None:
             skill_instruction = render_skill_as_instruction(skill)
+            # 步骤 3：Skill 加载完成
+            yield "status", {"stage": "skill_load", "label": f"已加载技能：{req.skill_name}", "ok": True}
 
     # 3. 构建输入 messages(SYSTEM_PROMPT 由 create_agent 自动注入)
     input_messages: list[BaseMessage] = list(history)
@@ -231,6 +231,9 @@ async def astream_agent_response(
     final_message_seen = False
     llm_started = perf_counter()
     first_answer_ms: float | None = None
+
+    # 步骤 4：LLM 推理开始
+    yield "status", {"stage": "llm_start", "label": "AI 推理中…"}
 
     async for event in agent.astream_events(
         {"messages": input_messages},
