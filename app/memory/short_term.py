@@ -15,12 +15,22 @@
 from __future__ import annotations
 
 import json
+import logging
+from functools import lru_cache
 from typing import List
 
 import redis
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=1)
+def _cached_redis_client(redis_url: str) -> redis.Redis:
+    """模块级缓存的 Redis 客户端，避免每次实例化创建新连接池。"""
+    return redis.Redis.from_url(redis_url, decode_responses=True)
 
 
 # 角色 → 工厂函数,把存储记录还原为 LangChain 消息
@@ -55,7 +65,7 @@ class ShortTermMemory:
         s = get_settings()
         self.session_id = session_id
         self._ttl = s.REDIS_TTL_SECONDS
-        self._cli = client or redis.Redis.from_url(s.REDIS_URL, decode_responses=True)
+        self._cli = client or _cached_redis_client(s.REDIS_URL)
 
     # ---------- key 命名 ----------
     @property
@@ -104,8 +114,14 @@ class ShortTermMemory:
         self._cli.expire(self._msg_key, self._ttl)
 
     def clear(self) -> None:
-        """清空(用于测试/调试)。"""
-        self._cli.delete(self._msg_key, self._sum_key)
+        """删除该 session 的所有 Redis 键。Redis 不可达时只记日志，不抛异常。"""
+        try:
+            pipe = self._cli.pipeline()
+            pipe.delete(self._msg_key)
+            pipe.delete(self._sum_key)
+            pipe.execute()
+        except Exception as exc:
+            logger.warning("ShortTermMemory.clear 失败 session=%s: %s", self.session_id, exc, exc_info=True)
 
     # ---------- 滚动摘要缓存 ----------
     def get_summary(self) -> str:

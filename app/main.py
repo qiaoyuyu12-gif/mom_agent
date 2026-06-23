@@ -10,6 +10,7 @@ FastAPI 应用入口。
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -17,6 +18,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.api.chat import router as chat_router
+from app.api.history import router as history_router
+from app.api.nap import router as nap_router
 from app.api.skills import router as skills_router
 from app.config import get_settings
 from app.db.session import SessionLocal
@@ -42,11 +45,14 @@ def create_app() -> FastAPI:
     # 业务路由
     app.include_router(chat_router)
     app.include_router(skills_router)
+    app.include_router(history_router)
+    # NAP(NoDeskClaw Agent Protocol)兼容路由：/health /meta /stream
+    app.include_router(nap_router)
 
     @app.get("/health")
     def health() -> dict:
-        """健康检查端点。"""
-        return {"ok": True}
+        """NAP 健康检查端点，返回 status=ok 及当前 Unix 时间戳。"""
+        return {"status": "ok", "timestamp": int(time.time())}
 
     # 启动:同步 skill 目录到 DB
     @app.on_event("startup")
