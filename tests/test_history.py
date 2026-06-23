@@ -31,4 +31,7 @@ def test_clear_does_not_raise_on_redis_error(caplog):
     mem = ShortTermMemory("test-sess", client=mock_redis)
     with caplog.at_level(logging.WARNING):
         mem.clear()  # 不应抛出
-    assert "test-sess" in caplog.text
+    assert any(
+        r.levelno == logging.WARNING and "test-sess" in r.message
+        for r in caplog.records
+    )

@@ -113,8 +113,8 @@ class ShortTermMemory:
             pipe.delete(self._msg_key)
             pipe.delete(self._sum_key)
             pipe.execute()
-        except Exception:
-            logger.warning("ShortTermMemory.clear 失败 session=%s", self.session_id)
+        except Exception as exc:
+            logger.warning("ShortTermMemory.clear 失败 session=%s: %s", self.session_id, exc, exc_info=True)
 
     # ---------- 滚动摘要缓存 ----------
     def get_summary(self) -> str:
