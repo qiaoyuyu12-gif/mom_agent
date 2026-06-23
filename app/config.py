@@ -111,6 +111,20 @@ class Settings(BaseSettings):
         # 允许空串;实际取列表时再 split
         return v.strip()
 
+    @field_validator(
+        "LLM_TEMPERATURE",
+        "LLM_MAX_TOKENS",
+        "LLM_ENABLE_THINKING_PARAM",
+        mode="before",
+    )
+    @classmethod
+    def _empty_str_as_none(cls, v: Any) -> Any:
+        # .env 里写成 `KEY=` 时,pydantic-settings 读出空字符串,
+        # 而 Optional[bool/int/float] 无法把 "" 强转。这里把空串视作未设置。
+        if isinstance(v, str) and v.strip() == "":
+            return None
+        return v
+
     @property
     def ragflow_dataset_id_list(self) -> List[str]:
         """把逗号分隔字符串解析为 dataset_id 列表(去空白)。"""

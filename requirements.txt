@@ -1,23 +1,26 @@
-# Web 框架与服务
+﻿# Web 框架与服务
 fastapi==0.115.4
 uvicorn[standard]==0.32.0
 python-multipart==0.0.17
 sse-starlette==2.1.3
 
 # 配置与校验
-pydantic==2.9.2
-pydantic-settings==2.6.1
+pydantic==2.10.1
+pydantic-settings==2.10.1
 python-dotenv==1.0.1
 
 # HTTP 客户端(调 RAGFlow / vLLM)
 httpx==0.27.2
 
-# LangChain 生态(1.x:含 create_agent + middleware 框架)
-langchain>=1.0,<2
-langchain-core>=1.0,<2
-langchain-openai>=1.0,<2
-langchain-community>=0.3,<1
-langgraph>=1.0,<2
+# LangChain 生态(1.3 / 1.4:含 create_agent + middleware 框架)
+# 注:此前钉的 1.0.x 与 langgraph-checkpoint 4.1.x 不兼容
+# (jsonplus.py 调用 Reviver(allowed_objects=...) 需 langchain-core>=1.3),
+# 故整套升到 1.3/1.4 已验证组合。
+langchain==1.3.4
+langchain-core==1.4.0
+langchain-openai==1.2.2
+langgraph==1.2.4
+langgraph-prebuilt==1.1.0
 
 # 存储
 redis==5.2.0

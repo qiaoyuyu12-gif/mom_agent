@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import List
 
-from sqlalchemy import desc, func, select, text
+from sqlalchemy import delete, desc, func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session as OrmSession
 
@@ -34,6 +34,86 @@ def ensure_session(db: OrmSession, session_id: str, user_id: str | None = None) 
     stmt = stmt.on_conflict_do_update(index_elements=[SessionRow.id], set_=update_cols)
     db.execute(stmt)
     db.commit()
+
+
+def list_sessions(db: OrmSession, user_id: str, limit: int = 100) -> List[dict]:
+    """列出某用户的全部会话(供侧边栏会话列表)。
+
+    返回按 updated_at 倒序的 [{session_id, title, message_count, updated_at}],
+    title 取该会话第一条用户消息的前若干字符。只列出已有归档消息的会话。
+    """
+    sess_rows = list(
+        db.execute(
+            select(SessionRow.id, SessionRow.updated_at)
+            .where(SessionRow.user_id == user_id)
+            .order_by(desc(SessionRow.updated_at))
+            .limit(limit)
+        ).all()
+    )
+    if not sess_rows:
+        return []
+    ids = [r[0] for r in sess_rows]
+
+    # 每会话第一条用户消息(DISTINCT ON 取每组最早一条)做标题
+    title_rows = db.execute(
+        select(Message.session_id, Message.content)
+        .where(Message.session_id.in_(ids), Message.role == "user")
+        .distinct(Message.session_id)
+        .order_by(Message.session_id, Message.created_at, Message.id)
+    ).all()
+    titles = {sid: content for sid, content in title_rows}
+
+    # 每会话消息计数
+    count_rows = db.execute(
+        select(Message.session_id, func.count())
+        .where(Message.session_id.in_(ids), Message.role.in_(("user", "assistant")))
+        .group_by(Message.session_id)
+    ).all()
+    counts = {sid: n for sid, n in count_rows}
+
+    out: list[dict] = []
+    for sid, updated_at in sess_rows:
+        n = counts.get(sid, 0)
+        if n == 0:
+            continue  # 没有任何归档消息的空会话不展示
+        title = (titles.get(sid) or "").strip().replace("\n", " ")
+        if len(title) > 40:
+            title = title[:40] + "…"
+        out.append(
+            {
+                "session_id": sid,
+                "title": title or "(无标题)",
+                "message_count": n,
+                "updated_at": updated_at.isoformat() if updated_at else None,
+            }
+        )
+    return out
+
+
+def get_session_messages(db: OrmSession, session_id: str, limit: int = 500) -> List[Message]:
+    """按时间正序返回某会话归档的全部消息(供「历史聊天记录」查看)。
+
+    只取用户/助手消息(过滤掉内部 system 注入),最多 limit 条。
+    """
+    stmt = (
+        select(Message)
+        .where(Message.session_id == session_id)
+        .where(Message.role.in_(("user", "assistant")))
+        .order_by(Message.created_at, Message.id)
+        .limit(limit)
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
+def delete_session_history(db: OrmSession, session_id: str) -> int:
+    """删除某会话的全部归档消息与滚动摘要,返回删除的消息条数。
+
+    保留 sessions 主表行(session_id 仍有效,可继续对话)。
+    """
+    n = db.execute(delete(Message).where(Message.session_id == session_id)).rowcount or 0
+    db.execute(delete(SessionSummary).where(SessionSummary.session_id == session_id))
+    db.commit()
+    return int(n)
 
 
 def archive_message(
