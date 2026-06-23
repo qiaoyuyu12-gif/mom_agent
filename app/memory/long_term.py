@@ -202,13 +202,13 @@ def list_sessions(
 
     return [
         {
-            "session_id": row[0].id,
+            "session_id": sess.id,
             # 标题截取前 30 字符；无用户消息时回退为"新对话"
-            "title": row[1][:30] if row[1] else "新对话",
-            "updated_at": row[0].updated_at.isoformat(),
-            "message_count": int(row[2] or 0),
+            "title": first_content[:30] if first_content else "新对话",
+            "updated_at": sess.updated_at.isoformat(),
+            "message_count": int(cnt or 0),
         }
-        for row in rows
+        for sess, first_content, cnt in rows
     ]
 
 
